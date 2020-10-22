@@ -65,7 +65,7 @@ plt.show()
 # Remember that our LIDAR data is actually just a set of positions estimated from a separate
 # scan-matching system, so we can insert it into our solver as another position measurement,
 # just as we do for GNSS. However, the LIDAR frame is not the same as the frame shared by the
-# IMU and the GNSS. To remedy this, we transform the LIDAR data to the IMU frame using our 
+# IMU and the GNSS. To remedy this, we transform the LIDAR data to the IMU frame using our
 # known extrinsic calibration rotation matrix C_li and translation vector t_i_li.
 #
 # THIS IS THE CODE YOU WILL MODIFY FOR PART 2 OF THE ASSIGNMENT.
@@ -135,13 +135,20 @@ lidar_i = 0
 # a function for it.
 ################################################################################################
 def measurement_update(sensor_var, p_cov_check, y_k, p_check, v_check, q_check):
-    # 3.1 Compute Kalman Gain
-
+    R_K = np.diag(sensor_var)
+    # 3.1 Compute Kalman
+    K = p_cov_check.dot(h_jac.T.dot(np.linalg.inv(h_jac.dot(p_cov_check.dot(h_jac.T)) + R_K))
     # 3.2 Compute error state
-
+    #e_state = np.zeros([imu_f.data.shape[0], 9, 9])
+    e_state = K.dot(y_k - p_check)
     # 3.3 Correct predicted state
-
+    p_hat = p_check + e_state[:3]
+    v_hat = v_check + e_state[3:6]
+    q_e_state = e_state[6:]
+    q_error = Quaternion(axis_angle=q_e_state)
+    q_hat = q_error.quat_mult_right(q_check)
     # 3.4 Compute corrected covariance
+    p_cov_hat = (np.eye(9) - K.dot(h_jac)).dot(p_cov_check)
 
     return p_hat, v_hat, q_hat, p_cov_hat
 
