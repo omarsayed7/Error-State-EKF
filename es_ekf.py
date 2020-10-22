@@ -14,7 +14,7 @@ from rotations import angle_normalize, rpy_jacobian_axis_angle, skew_symmetric, 
 # This is where you will load the data from the pickle files. For parts 1 and 2, you will use
 # p1_data.pkl. For Part 3, you will use pt3_data.pkl.
 ################################################################################################
-with open('data/pt1_data.pkl', 'rb') as file:
+with open('data/pt3_data.pkl', 'rb') as file:
     data = pickle.load(file)
 
 ################################################################################################
@@ -76,14 +76,14 @@ C_li = np.array([
    [ 0.09971,  0.99401, -0.04475],
    [-0.04998,  0.04992,  0.9975 ]
 ])
-
+'''
 # Incorrect calibration rotation matrix, corresponding to Euler RPY angles (0.05, 0.05, 0.05).
-# C_li = np.array([
-#      [ 0.9975 , -0.04742,  0.05235],
-#      [ 0.04992,  0.99763, -0.04742],
-#      [-0.04998,  0.04992,  0.9975 ]
-# ])
-
+C_li = np.array([
+      [ 0.9975 , -0.04742,  0.05235],
+      [ 0.04992,  0.99763, -0.04742],
+      [-0.04998,  0.04992,  0.9975 ]
+ ])
+'''
 t_i_li = np.array([0.5, 0.1, 0.5])
 
 # Transform from the LIDAR frame to the vehicle (IMU) frame.
@@ -96,10 +96,11 @@ lidar.data = (C_li @ lidar.data.T).T + t_i_li
 # most important aspects of a filter is setting the estimated sensor variances correctly.
 # We set the values here.
 ################################################################################################
+
 var_imu_f = 0.10
 var_imu_w = 0.25
 var_gnss  = 0.01
-var_lidar = 1.00
+var_lidar = 100
 
 ################################################################################################
 # We can also set up some constants that won't change for any iteration of our solver.
@@ -135,9 +136,9 @@ lidar_i = 0
 # a function for it.
 ################################################################################################
 def measurement_update(sensor_var, p_cov_check, y_k, p_check, v_check, q_check):
-    R_K = np.diag(sensor_var)
+    R_K = np.eye(3) * sensor_var
     # 3.1 Compute Kalman
-    K = p_cov_check.dot(h_jac.T.dot(np.linalg.inv(h_jac.dot(p_cov_check.dot(h_jac.T)) + R_K))
+    K = p_cov_check.dot(h_jac.T.dot(np.linalg.inv(h_jac.dot(p_cov_check.dot(h_jac.T)) + R_K)))
     # 3.2 Compute error state
     #e_state = np.zeros([imu_f.data.shape[0], 9, 9])
     e_state = K.dot(y_k - p_check)
@@ -151,7 +152,6 @@ def measurement_update(sensor_var, p_cov_check, y_k, p_check, v_check, q_check):
     p_cov_hat = (np.eye(9) - K.dot(h_jac)).dot(p_cov_check)
 
     return p_hat, v_hat, q_hat, p_cov_hat
-
 #### 5. Main Filter Loop #######################################################################
 
 ################################################################################################
@@ -160,17 +160,33 @@ def measurement_update(sensor_var, p_cov_check, y_k, p_check, v_check, q_check):
 ################################################################################################
 for k in range(1, imu_f.data.shape[0]):  # start at 1 b/c we have initial prediction from gt
     delta_t = imu_f.t[k] - imu_f.t[k - 1]
-
     # 1. Update state with IMU inputs
-
+    C_ns = Quaternion(*q_est[k-1]).to_mat()
+    p_est[k] = p_est[k-1] + delta_t * v_est[k-1] + (delta_t**2 * (C_ns.dot(imu_f.data[k-1]) - g)) / 2
+    v_est[k] = v_est[k-1] + delta_t * (C_ns.dot(imu_f.data[k-1]) + g)
+    q_est[k] = Quaternion(euler= imu_w.data[k-1] * delta_t).quat_mult_right(q_est[k-1])
     # 1.1 Linearize the motion model and compute Jacobians
-
+    F= np.eye(9)
+    F[:3,3:6] = delta_t * np.eye(3)
+    F[3:6,6:] = -(C_ns.dot(skew_symmetric(imu_f.data[k-1]))*delta_t)
+    Q = np.eye(6)
+    Q[:3,:3]= var_imu_f *np.eye(3)
+    Q[3:,3:]= var_imu_w *np.eye(3)
+    Q = delta_t**2 * Q
     # 2. Propagate uncertainty
-
+    p_cov[k] = F.dot(p_cov[k-1]).dot(F.T)+l_jac.dot(Q).dot(l_jac.T)
     # 3. Check availability of GNSS and LIDAR measurements
+    for i in range(len(gnss.t)):
+        if abs(gnss.t[i] - imu_f.t[k]) < 0.01:
+            p_est[k], v_est[k], q_est[k], p_cov[k] = measurement_update(var_gnss, p_cov[k],
+                                                    gnss.data[i], p_est[k], v_est[k], q_est[k])
+    for i in range(len(lidar.t)):
+        if abs(lidar.t[i] - imu_f.t[k]) < 0.01:
+            p_est[k], v_est[k], q_est[k], p_cov[k] = measurement_update(var_lidar, p_cov[k],
+                                                    lidar.data[i], p_est[k], v_est[k], q_est[k])
 
     # Update states (save)
-
+    #p_est, v_est, q_est, p_cov = measurement_update(p_est, v_est, q_est)
 #### 6. Results and Analysis ###################################################################
 
 ################################################################################################
@@ -247,7 +263,7 @@ plt.show()
 # corresponding lines to prepare a file that will save your position estimates in a format
 # that corresponds to what we're expecting on Coursera.
 ################################################################################################
-
+'''
 # Pt. 1 submission
 p1_indices = [9000, 9400, 9800, 10200, 10600]
 p1_str = ''
@@ -258,19 +274,20 @@ with open('pt1_submission.txt', 'w') as file:
     file.write(p1_str)
 
 # Pt. 2 submission
-# p2_indices = [9000, 9400, 9800, 10200, 10600]
-# p2_str = ''
-# for val in p2_indices:
-#     for i in range(3):
-#         p2_str += '%.3f ' % (p_est[val, i])
-# with open('pt2_submission.txt', 'w') as file:
-#     file.write(p2_str)
+p2_indices = [9000, 9400, 9800, 10200, 10600]
+p2_str = ''
+for val in p2_indices:
+    for i in range(3):
+        p2_str += '%.3f ' % (p_est[val, i])
+with open('pt2_submission.txt', 'w') as file:
+    file.write(p2_str)
 
-# Pt. 3 submission
-# p3_indices = [6800, 7600, 8400, 9200, 10000]
-# p3_str = ''
-# for val in p3_indices:
-#     for i in range(3):
-#         p3_str += '%.3f ' % (p_est[val, i])
-# with open('pt3_submission.txt', 'w') as file:
-#     file.write(p3_str)
+#Pt. 3 submission
+p3_indices = [6800, 7600, 8400, 9200, 10000]
+p3_str = ''
+for val in p3_indices:
+    for i in range(3):
+        p3_str += '%.3f ' % (p_est[val, i])
+with open('pt3_submission.txt', 'w') as file:
+    file.write(p3_str)
+'''
